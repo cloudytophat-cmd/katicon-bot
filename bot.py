@@ -11,6 +11,7 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
+
 tree = discord.app_commands.CommandTree(client)
 
 seen_ids = set()
@@ -87,7 +88,7 @@ async def check_rotation():
 
 
 # -------------------------
-# SLASH COMMAND (/check)
+# SLASH COMMAND
 # -------------------------
 @tree.command(name="check", description="Manually check Mythic Shop updates")
 async def check(interaction: discord.Interaction):
@@ -114,7 +115,7 @@ async def check(interaction: discord.Interaction):
 async def on_ready():
     print(f"Logged in as {client.user}")
 
-    await tree.sync()  # IMPORTANT FIX
+    await tree.sync()
 
     channel = client.get_channel(CHANNEL_ID)
     if channel:
@@ -123,7 +124,4 @@ async def on_ready():
     check_rotation.start()
 
 
-# -------------------------
-# RUN BOT
-# -------------------------
 client.run(TOKEN)
