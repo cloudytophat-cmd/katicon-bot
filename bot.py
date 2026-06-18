@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+GUILD_ID = os.getenv("GUILD_ID")  # optional
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
@@ -18,7 +18,7 @@ KEYWORDS = ["mythic shop", "rotation"]
 
 
 # -----------------------------
-# PUBLIC FETCH (NO LOGIN)
+# FETCH X HTML (PUBLIC)
 # -----------------------------
 def fetch_latest_posts():
     try:
@@ -29,13 +29,13 @@ def fetch_latest_posts():
 
         r = requests.get(url, headers=headers, timeout=15)
 
+        print("STATUS:", r.status_code)
+        print("HTML SIZE:", len(r.text))
+
         if r.status_code != 200:
-            print("HTTP error:", r.status_code)
             return None
 
-        html = r.text.lower()
-
-        return html
+        return r.text.lower()
 
     except Exception as e:
         print("Fetch error:", e)
@@ -47,21 +47,19 @@ def fetch_latest_posts():
 # -----------------------------
 def detect_mythic_shop(html):
     if not html:
-        return None
+        return False
 
-    if all(k in html for k in KEYWORDS):
-        return True
-
-    return False
+    return all(k in html for k in KEYWORDS)
 
 
 # -----------------------------
-# /check COMMAND
+# /check COMMAND (FIXED)
 # -----------------------------
-@tree.command(name="check", description="Check Mythic Shop updates (stable mode)")
+@tree.command(name="check", description="Check Mythic Shop updates")
 async def check(interaction: discord.Interaction):
 
-    await interaction.response.send_message("🔎 Checking Mythic Shop...")
+    # IMPORTANT: prevents "outdated command" / timeout issues
+    await interaction.response.defer()
 
     html = fetch_latest_posts()
 
@@ -72,20 +70,22 @@ async def check(interaction: discord.Interaction):
 
 
 # -----------------------------
-# READY
+# READY EVENT
 # -----------------------------
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
 
     try:
-        await tree.sync()
+        if GUILD_ID:
+            guild = discord.Object(id=int(GUILD_ID))
+            await tree.sync(guild=guild)
+        else:
+            await tree.sync()
     except Exception as e:
         print("Sync error:", e)
 
-    channel = client.get_channel(CHANNEL_ID)
-    if channel:
-        await channel.send("✅ Mythic Shop Bot (stable mode) online")
+    print("Bot is ready")
 
 
 client.run(DISCORD_TOKEN)
