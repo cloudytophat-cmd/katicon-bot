@@ -1,5 +1,6 @@
 import discord
 from discord.ext import tasks
+from discord import app_commands
 import os
 import requests
 from dotenv import load_dotenv
@@ -10,7 +11,10 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 BEARER_TOKEN = os.getenv("X_BEARER_TOKEN")
 
-client = discord.Client(intents=discord.Intents.default())
+intents = discord.Intents.default()
+client = discord.Client(intents=intents)
+
+tree = app_commands.CommandTree(client)
 
 seen_ids = set()
 
@@ -18,7 +22,7 @@ USERNAME = "SkinSpotlights"
 
 
 # -----------------------------
-# X API REQUEST
+# X API FETCH FUNCTION
 # -----------------------------
 def fetch_latest_tweet():
     try:
@@ -26,18 +30,28 @@ def fetch_latest_tweet():
             "Authorization": f"Bearer {BEARER_TOKEN}"
         }
 
-        # Step 1: get user ID
+        # Get user ID
         user_url = f"https://api.twitter.com/2/users/by/username/{USERNAME}"
-        user_resp = requests.get(user_url, headers=headers).json()
+        user_resp = requests.get(user_url, headers=headers, timeout=10).json()
+
+        if "data" not in user_resp:
+            print("User fetch failed:", user_resp)
+            return None
 
         user_id = user_resp["data"]["id"]
 
-        # Step 2: get tweets
-        tweet_url = f"https://api.twitter.com/2/users/{user_id}/tweets?max_results=10&expansions=attachments.media_keys&media.fields=url"
+        # Get tweets
+        tweet_url = (
+            f"https://api.twitter.com/2/users/{user_id}/tweets"
+            f"?max_results=10"
+            f"&expansions=attachments.media_keys"
+            f"&media.fields=url"
+        )
 
-        tweet_resp = requests.get(tweet_url, headers=headers).json()
+        tweet_resp = requests.get(tweet_url, headers=headers, timeout=10).json()
 
         if "data" not in tweet_resp:
+            print("Tweet fetch failed:", tweet_resp)
             return None
 
         tweets = tweet_resp["data"]
@@ -77,7 +91,7 @@ def fetch_latest_tweet():
 
 
 # -----------------------------
-# CHECK LOOP
+# HOURLY CHECK LOOP
 # -----------------------------
 @tasks.loop(hours=1)
 async def check_rotation():
@@ -99,27 +113,35 @@ async def check_rotation():
 
 
 # -----------------------------
-# MANUAL CHECK
+# /check SLASH COMMAND
 # -----------------------------
-@client.event
-async def on_message(message):
-    if message.content == "/check":
-        tweet = fetch_latest_tweet()
+@tree.command(name="check", description="Check Mythic Shop rotation")
+async def check(interaction: discord.Interaction):
 
-        if not tweet:
-            await message.channel.send("❌ No rotation found")
-            return
+    await interaction.response.defer()
 
-        await message.channel.send("🚨 Found latest Mythic Shop rotation!")
-        await message.channel.send(tweet["url"])
+    tweet = fetch_latest_tweet()
+
+    if not tweet:
+        await interaction.followup.send("❌ No rotation found")
+        return
+
+    await interaction.followup.send("🚨 Found latest Mythic Shop rotation!")
+    await interaction.followup.send(tweet["url"])
 
 
 # -----------------------------
-# READY
+# READY EVENT
 # -----------------------------
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
+
+    try:
+        synced = await tree.sync()
+        print(f"Synced {len(synced)} commands")
+    except Exception as e:
+        print("Sync error:", e)
 
     channel = client.get_channel(CHANNEL_ID)
     if channel:
