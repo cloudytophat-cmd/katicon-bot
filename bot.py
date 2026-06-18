@@ -4,12 +4,16 @@ from discord import app_commands
 import os
 import requests
 from dotenv import load_dotenv
+from datetime import datetime, timezone
 
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 BEARER_TOKEN = os.getenv("X_BEARER_TOKEN")
+
+# OPTIONAL: put your Discord server ID in Railway env for instant slash updates
+GUILD_ID = os.getenv("GUILD_ID")
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
@@ -22,7 +26,7 @@ USERNAME = "SkinSpotlights"
 
 
 # -----------------------------
-# X API FETCH FUNCTION
+# X API FETCH
 # -----------------------------
 def fetch_latest_tweet():
     try:
@@ -30,7 +34,6 @@ def fetch_latest_tweet():
             "Authorization": f"Bearer {BEARER_TOKEN}"
         }
 
-        # Get user ID
         user_url = f"https://api.twitter.com/2/users/by/username/{USERNAME}"
         user_resp = requests.get(user_url, headers=headers, timeout=10).json()
 
@@ -40,7 +43,6 @@ def fetch_latest_tweet():
 
         user_id = user_resp["data"]["id"]
 
-        # Get tweets
         tweet_url = (
             f"https://api.twitter.com/2/users/{user_id}/tweets"
             f"?max_results=10"
@@ -91,31 +93,35 @@ def fetch_latest_tweet():
 
 
 # -----------------------------
-# HOURLY CHECK LOOP
+# SCHEDULED 2AM CHECK (UTC)
 # -----------------------------
-@tasks.loop(hours=1)
-async def check_rotation():
-    print("Checking X API...")
+@tasks.loop(minutes=1)
+async def scheduled_check():
+    now = datetime.now(timezone.utc)
 
-    channel = client.get_channel(CHANNEL_ID)
-    if not channel:
-        print("Channel not found")
-        return
+    # 02:00 UTC daily check
+    if now.hour == 2 and now.minute == 0:
+        print("Running scheduled 2AM check...")
 
-    tweet = fetch_latest_tweet()
+        channel = client.get_channel(CHANNEL_ID)
+        if not channel:
+            print("Channel not found")
+            return
 
-    if not tweet:
-        print("No rotation found")
-        return
+        tweet = fetch_latest_tweet()
 
-    await channel.send("🚨 Mythic Shop rotation detected!")
-    await channel.send(tweet["url"])
+        if not tweet:
+            print("No rotation found")
+            return
+
+        await channel.send("🚨 Mythic Shop rotation detected!")
+        await channel.send(tweet["url"])
 
 
 # -----------------------------
-# /check SLASH COMMAND
+# /check COMMAND (FIXED SYNC + NO TIMEOUT ISSUES)
 # -----------------------------
-@tree.command(name="check", description="Check Mythic Shop rotation")
+@tree.command(name="check", description="Check Mythic Shop rotation manually")
 async def check(interaction: discord.Interaction):
 
     await interaction.response.defer()
@@ -131,15 +137,23 @@ async def check(interaction: discord.Interaction):
 
 
 # -----------------------------
-# READY EVENT
+# READY EVENT (FIXED COMMAND SYNC)
 # -----------------------------
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
 
     try:
-        synced = await tree.sync()
-        print(f"Synced {len(synced)} commands")
+        # Instant sync (guild)
+        if GUILD_ID:
+            guild = discord.Object(id=int(GUILD_ID))
+            await tree.sync(guild=guild)
+            print("Guild slash commands synced.")
+        else:
+            # fallback global sync
+            synced = await tree.sync()
+            print(f"Global sync complete: {len(synced)} commands")
+
     except Exception as e:
         print("Sync error:", e)
 
@@ -147,7 +161,7 @@ async def on_ready():
     if channel:
         await channel.send("✅ X API Mythic Bot is online!")
 
-    check_rotation.start()
+    scheduled_check.start()
 
 
 client.run(DISCORD_TOKEN)
