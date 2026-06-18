@@ -1,157 +1,131 @@
 import discord
 from discord.ext import tasks
 import os
-import snscrape.modules.twitter as sntwitter
 import requests
-from PIL import Image
-from io import BytesIO
-import pytesseract
 from dotenv import load_dotenv
 
 load_dotenv()
 
-TOKEN = os.getenv("DISCORD_TOKEN")
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+BEARER_TOKEN = os.getenv("X_BEARER_TOKEN")
 
-intents = discord.Intents.default()
-client = discord.Client(intents=intents)
+client = discord.Client(intents=discord.Intents.default())
 
-seen_tweets = set()
+seen_ids = set()
 
-TARGET_ACCOUNT = "SkinSpotlights"
+USERNAME = "SkinSpotlights"
 
 
-# -------------------------
-# OCR CHECK
-# -------------------------
-def image_has_golden_katarina(image_url: str) -> bool:
+# -----------------------------
+# X API REQUEST
+# -----------------------------
+def fetch_latest_tweet():
     try:
-        response = requests.get(image_url, timeout=10)
-        img = Image.open(BytesIO(response.content))
+        headers = {
+            "Authorization": f"Bearer {BEARER_TOKEN}"
+        }
 
-        text = pytesseract.image_to_string(img).lower()
+        # Step 1: get user ID
+        user_url = f"https://api.twitter.com/2/users/by/username/{USERNAME}"
+        user_resp = requests.get(user_url, headers=headers).json()
 
-        print("OCR TEXT:", text)
+        user_id = user_resp["data"]["id"]
 
-        return "katarina" in text and "golden" in text
+        # Step 2: get tweets
+        tweet_url = f"https://api.twitter.com/2/users/{user_id}/tweets?max_results=10&expansions=attachments.media_keys&media.fields=url"
 
-    except Exception as e:
-        print("OCR error:", e)
-        return False
+        tweet_resp = requests.get(tweet_url, headers=headers).json()
 
+        if "data" not in tweet_resp:
+            return None
 
-# -------------------------
-# FETCH X POSTS
-# -------------------------
-def fetch_latest_rotation():
-    try:
-        query = f"from:{TARGET_ACCOUNT} mythic shop"
+        tweets = tweet_resp["data"]
+        includes = tweet_resp.get("includes", {})
 
-        for tweet in sntwitter.TwitterSearchScraper(query).get_items():
-            tweet_id = str(tweet.id)
+        media_map = {}
+        for m in includes.get("media", []):
+            media_map[m["media_key"]] = m.get("url")
 
-            if tweet_id in seen_tweets:
+        for t in tweets:
+            if t["id"] in seen_ids:
                 continue
 
-            seen_tweets.add(tweet_id)
+            seen_ids.add(t["id"])
 
-            text = tweet.content.lower()
+            text = t["text"].lower()
 
             if "mythic shop" in text and "rotation" in text:
                 images = []
 
-                if tweet.media:
-                    for m in tweet.media:
-                        if hasattr(m, "fullUrl"):
-                            images.append(m.fullUrl)
+                attachments = t.get("attachments", {})
+                for key in attachments.get("media_keys", []):
+                    if key in media_map:
+                        images.append(media_map[key])
 
                 return {
-                    "id": tweet_id,
-                    "text": tweet.content,
+                    "id": t["id"],
+                    "text": t["text"],
                     "images": images,
-                    "url": tweet.url
+                    "url": f"https://x.com/{USERNAME}/status/{t['id']}"
                 }
 
     except Exception as e:
-        print("X fetch error:", e)
+        print("X API error:", e)
 
     return None
 
 
-# -------------------------
+# -----------------------------
 # CHECK LOOP
-# -------------------------
+# -----------------------------
 @tasks.loop(hours=1)
 async def check_rotation():
-    print("Checking X for Mythic Shop...")
+    print("Checking X API...")
 
     channel = client.get_channel(CHANNEL_ID)
     if not channel:
         print("Channel not found")
         return
 
-    post = fetch_latest_rotation()
+    tweet = fetch_latest_tweet()
 
-    if not post:
+    if not tweet:
         print("No rotation found")
         return
 
-    print("Rotation post found")
-
-    # Check images for Golden Katarina
-    match = False
-
-    for img in post["images"]:
-        if image_has_golden_katarina(img):
-            match = True
-            break
-
-    if match:
-        await channel.send("🚨 GOLDEN KATARINA DETECTED IN MYTHIC SHOP!")
-        await channel.send(post["url"])
-    else:
-        print("Rotation found but no Golden Katarina")
+    await channel.send("🚨 Mythic Shop rotation detected!")
+    await channel.send(tweet["url"])
 
 
-# -------------------------
-# SLASH COMMAND
-# -------------------------
+# -----------------------------
+# MANUAL CHECK
+# -----------------------------
 @client.event
 async def on_message(message):
     if message.content == "/check":
-        post = fetch_latest_rotation()
+        tweet = fetch_latest_tweet()
 
-        if not post:
+        if not tweet:
             await message.channel.send("❌ No rotation found")
             return
 
-        await message.channel.send("Checking latest rotation...")
-
-        match = False
-
-        for img in post["images"]:
-            if image_has_golden_katarina(img):
-                match = True
-                break
-
-        if match:
-            await message.channel.send("🚨 GOLDEN KATARINA DETECTED!")
-        else:
-            await message.channel.send("No Golden Katarina found.")
+        await message.channel.send("🚨 Found latest Mythic Shop rotation!")
+        await message.channel.send(tweet["url"])
 
 
-# -------------------------
+# -----------------------------
 # READY
-# -------------------------
+# -----------------------------
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
 
     channel = client.get_channel(CHANNEL_ID)
     if channel:
-        await channel.send("✅ Mythic Shop Bot (X-based) is online!")
+        await channel.send("✅ X API Mythic Bot is online!")
 
     check_rotation.start()
 
 
-client.run(TOKEN)
+client.run(DISCORD_TOKEN)
