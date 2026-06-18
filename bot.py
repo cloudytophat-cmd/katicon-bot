@@ -5,8 +5,8 @@ import os
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
-
 from dotenv import load_dotenv
+
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -24,53 +24,66 @@ PROFILE_URL = f"https://x.com/{USERNAME}"
 
 
 # -----------------------------
-# FETCH LATEST TWEET VIA HTML
+# FETCH + FILTER TWEETS PROPERLY
 # -----------------------------
-def fetch_latest_tweet():
+def fetch_mythic_tweet():
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0"
-        }
-
+        headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(PROFILE_URL, headers=headers, timeout=10)
 
-        print("STATUS:", r.status_code)
-
         if r.status_code != 200:
+            print("STATUS:", r.status_code)
             return None
 
         soup = BeautifulSoup(r.text, "html.parser")
 
-        # Find tweet links
-        tweets = soup.find_all("a", href=True)
+        # Find tweet blocks
+        articles = soup.find_all("article")
 
-        tweet_ids = []
-        for t in tweets:
-            if "/status/" in t["href"]:
-                parts = t["href"].split("/")
-                try:
-                    tweet_id = parts[-1]
-                    if tweet_id.isdigit():
-                        tweet_ids.append(tweet_id)
-                except:
-                    continue
+        for article in articles:
+            text = article.get_text(" ").lower()
 
-        if not tweet_ids:
-            return None
+            # -----------------------------
+            # FILTER: only Mythic posts
+            # -----------------------------
+            if "mythic" not in text or "shop" not in text:
+                continue
 
-        latest_id = tweet_ids[0]
+            # ignore pinned tweets (common keyword)
+            if "pinned" in text:
+                continue
 
-        if latest_id in seen_ids:
-            return None
+            # find tweet link
+            link = article.find("a", href=True)
+            if not link:
+                continue
 
-        seen_ids.add(latest_id)
+            href = link["href"]
+            if "/status/" not in href:
+                continue
 
-        tweet_url = f"https://x.com/{USERNAME}/status/{latest_id}"
+            tweet_id = href.split("/")[-1]
 
-        return {
-            "id": latest_id,
-            "url": tweet_url
-        }
+            if tweet_id in seen_ids:
+                continue
+
+            seen_ids.add(tweet_id)
+
+            # find images
+            images = []
+            imgs = article.find_all("img")
+            for img in imgs:
+                src = img.get("src")
+                if src and "twimg" in src:
+                    images.append(src)
+
+            return {
+                "id": tweet_id,
+                "url": f"https://x.com/{USERNAME}/status/{tweet_id}",
+                "images": images
+            }
+
+        return None
 
     except Exception as e:
         print("Scrape error:", e)
@@ -78,21 +91,24 @@ def fetch_latest_tweet():
 
 
 # -----------------------------
-# /check COMMAND
+# /check COMMAND (1 MESSAGE ONLY)
 # -----------------------------
-@tree.command(name="check", description="Check latest Mythic Shop post")
+@tree.command(name="check", description="Check Mythic Shop rotation")
 async def check(interaction: discord.Interaction):
 
-    await interaction.response.send_message("🔎 Checking latest post...")
-
-    tweet = fetch_latest_tweet()
+    tweet = fetch_mythic_tweet()
 
     if not tweet:
-        await interaction.followup.send("❌ No post found (or blocked)")
+        await interaction.response.send_message("❌ No Mythic Shop rotation found")
         return
 
-    await interaction.followup.send("📌 Latest post detected:")
-    await interaction.followup.send(tweet["url"])
+    content = f"🚨 Mythic Shop Rotation detected!\n{tweet['url']}"
+
+    await interaction.response.send_message(content)
+
+    # send images in SAME command flow
+    for img in tweet["images"][:3]:
+        await interaction.followup.send(img)
 
 
 # -----------------------------
@@ -108,13 +124,16 @@ async def scheduled_check():
         if not channel:
             return
 
-        tweet = fetch_latest_tweet()
+        tweet = fetch_mythic_tweet()
 
         if not tweet:
             return
 
-        await channel.send("🚨 Mythic Shop update detected!")
+        await channel.send("🚨 Mythic Shop Rotation detected!")
         await channel.send(tweet["url"])
+
+        for img in tweet["images"][:3]:
+            await channel.send(img)
 
 
 # -----------------------------
@@ -135,7 +154,7 @@ async def on_ready():
 
     channel = client.get_channel(CHANNEL_ID)
     if channel:
-        await channel.send("✅ No-API Mythic Bot online!")
+        await channel.send("✅ Mythic Bot (filtered) online")
 
     scheduled_check.start()
 
