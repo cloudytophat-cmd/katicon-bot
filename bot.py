@@ -1,7 +1,11 @@
 import discord
 from discord.ext import tasks
 import os
+import snscrape.modules.twitter as sntwitter
 import requests
+from PIL import Image
+from io import BytesIO
+import pytesseract
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,114 +16,140 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 
-tree = discord.app_commands.CommandTree(client)
+seen_tweets = set()
 
-seen_ids = set()
+TARGET_ACCOUNT = "SkinSpotlights"
 
 
 # -------------------------
-# REDDIT FETCHER
+# OCR CHECK
 # -------------------------
-def fetch_rotation_post():
+def image_has_golden_katarina(image_url: str) -> bool:
     try:
-        url = "https://www.reddit.com/r/leagueoflegends/new.json?limit=20"
+        response = requests.get(image_url, timeout=10)
+        img = Image.open(BytesIO(response.content))
 
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "application/json"
-        }
+        text = pytesseract.image_to_string(img).lower()
 
-        r = requests.get(url, headers=headers, timeout=10)
+        print("OCR TEXT:", text)
 
-        print("Reddit status:", r.status_code)
+        return "katarina" in text and "golden" in text
 
-        if r.status_code != 200:
-            return None
+    except Exception as e:
+        print("OCR error:", e)
+        return False
 
-        data = r.json()
 
-        for post in data["data"]["children"]:
-            p = post["data"]
-            title = p["title"].lower()
-            post_id = p["id"]
+# -------------------------
+# FETCH X POSTS
+# -------------------------
+def fetch_latest_rotation():
+    try:
+        query = f"from:{TARGET_ACCOUNT} mythic shop"
 
-            if post_id in seen_ids:
+        for tweet in sntwitter.TwitterSearchScraper(query).get_items():
+            tweet_id = str(tweet.id)
+
+            if tweet_id in seen_tweets:
                 continue
 
-            if "mythic shop" in title and "rotation" in title:
-                seen_ids.add(post_id)
+            seen_tweets.add(tweet_id)
+
+            text = tweet.content.lower()
+
+            if "mythic shop" in text and "rotation" in text:
+                images = []
+
+                if tweet.media:
+                    for m in tweet.media:
+                        if hasattr(m, "fullUrl"):
+                            images.append(m.fullUrl)
 
                 return {
-                    "id": post_id,
-                    "title": p["title"],
-                    "image": p.get("url_overridden_by_dest"),
-                    "url": "https://reddit.com" + p["permalink"]
+                    "id": tweet_id,
+                    "text": tweet.content,
+                    "images": images,
+                    "url": tweet.url
                 }
 
     except Exception as e:
-        print("Reddit error:", e)
+        print("X fetch error:", e)
 
     return None
 
 
 # -------------------------
-# HOURLY CHECK
+# CHECK LOOP
 # -------------------------
 @tasks.loop(hours=1)
 async def check_rotation():
-    print("Checking Mythic Shop updates...")
+    print("Checking X for Mythic Shop...")
 
     channel = client.get_channel(CHANNEL_ID)
     if not channel:
         print("Channel not found")
         return
 
-    result = fetch_rotation_post()
+    post = fetch_latest_rotation()
 
-    if result:
-        await channel.send("🚨 Mythic Shop Rotation detected!")
+    if not post:
+        print("No rotation found")
+        return
 
-        if result.get("image"):
-            await channel.send(result["image"])
+    print("Rotation post found")
 
-        await channel.send(result["url"])
+    # Check images for Golden Katarina
+    match = False
+
+    for img in post["images"]:
+        if image_has_golden_katarina(img):
+            match = True
+            break
+
+    if match:
+        await channel.send("🚨 GOLDEN KATARINA DETECTED IN MYTHIC SHOP!")
+        await channel.send(post["url"])
     else:
-        print("No update found")
+        print("Rotation found but no Golden Katarina")
 
 
 # -------------------------
 # SLASH COMMAND
 # -------------------------
-@tree.command(name="check", description="Manually check Mythic Shop updates")
-async def check(interaction: discord.Interaction):
-    await interaction.response.defer()
+@client.event
+async def on_message(message):
+    if message.content == "/check":
+        post = fetch_latest_rotation()
 
-    result = fetch_rotation_post()
+        if not post:
+            await message.channel.send("❌ No rotation found")
+            return
 
-    if not result:
-        await interaction.followup.send("❌ No update found.")
-        return
+        await message.channel.send("Checking latest rotation...")
 
-    await interaction.followup.send("🚨 Mythic Shop Rotation detected!")
+        match = False
 
-    if result.get("image"):
-        await interaction.followup.send(result["image"])
+        for img in post["images"]:
+            if image_has_golden_katarina(img):
+                match = True
+                break
 
-    await interaction.followup.send(result["url"])
+        if match:
+            await message.channel.send("🚨 GOLDEN KATARINA DETECTED!")
+        else:
+            await message.channel.send("No Golden Katarina found.")
 
 
 # -------------------------
-# READY EVENT
+# READY
 # -------------------------
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
 
-    await tree.sync()
-
     channel = client.get_channel(CHANNEL_ID)
     if channel:
-        await channel.send("✅ Bot is online!")
+        await channel.send("✅ Mythic Shop Bot (X-based) is online!")
 
     check_rotation.start()
 
