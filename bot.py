@@ -23,7 +23,7 @@ def fetch_rotation_post():
         url = "https://www.reddit.com/r/leagueoflegends/new.json?limit=20"
 
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "User-Agent": "Mozilla/5.0",
             "Accept": "application/json"
         }
 
@@ -86,7 +86,7 @@ async def check_rotation():
 
 
 # -------------------------
-# SLASH COMMAND
+# SLASH COMMAND (/check)
 # -------------------------
 @bot.slash_command(name="check", description="Manually check Mythic Shop updates")
 async def check(ctx):
@@ -107,7 +107,7 @@ async def check(ctx):
 
 
 # -------------------------
-# READY EVENT
+# ON READY (IMPORTANT FIX HERE)
 # -------------------------
 @bot.event
 async def on_ready():
@@ -115,12 +115,15 @@ async def on_ready():
 
     channel = bot.get_channel(CHANNEL_ID)
     if channel:
-        await channel.send("✅ Mythic Shop Bot is now online!")
+        await channel.send("✅ Bot is online!")
+
+    # IMPORTANT: force slash command sync
+    await bot.sync_commands()
 
     check_rotation.start()
 
 
 # -------------------------
-# RUN
+# RUN BOT
 # -------------------------
 bot.run(TOKEN)
