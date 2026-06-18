@@ -21,7 +21,6 @@ tree = app_commands.CommandTree(client)
 seen_ids = set()
 
 USERNAME = "SkinSpotlights"
-KEY_PHRASE = "mythic shop rotation!"
 
 
 # -----------------------------
@@ -61,10 +60,12 @@ def fetch_latest_tweet():
             media_map[m["media_key"]] = m.get("url")
 
         for t in tweets:
-            text = t["text"].lower()
+            text = t.get("text", "").lower()
 
-            # ONLY accept correct Mythic Shop posts
-            if KEY_PHRASE not in text:
+            # -----------------------------
+            # FIXED DETECTION LOGIC
+            # -----------------------------
+            if "mythic" not in text or "shop" not in text:
                 continue
 
             if t["id"] in seen_ids:
@@ -109,7 +110,7 @@ async def scheduled_check():
         tweet = fetch_latest_tweet()
 
         if not tweet:
-            print("No valid Mythic Shop post found")
+            print("No Mythic Shop update found")
             return
 
         await channel.send("🚨 Mythic Shop Rotation detected!")
@@ -155,6 +156,7 @@ async def on_ready():
         else:
             synced = await tree.sync()
             print(f"Global sync complete: {len(synced)} commands")
+
     except Exception as e:
         print("Sync error:", e)
 
