@@ -1,15 +1,12 @@
 import discord
-from discord.ext import tasks
 from discord import app_commands
 import os
 import requests
 from dotenv import load_dotenv
-from datetime import datetime, timezone
 
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 BEARER_TOKEN = os.getenv("X_BEARER_TOKEN")
 GUILD_ID = os.getenv("GUILD_ID")
 
@@ -22,56 +19,49 @@ USERNAME = "SkinSpotlights"
 
 
 # -----------------------------
-# DEBUG: RAW X API OUTPUT
+# SAFE DEBUG FUNCTION
 # -----------------------------
 def fetch_debug_data():
-    try:
-        headers = {"Authorization": f"Bearer {BEARER_TOKEN}"}
+    headers = {"Authorization": f"Bearer {BEARER_TOKEN}"}
 
-        # Step 1: get user info
-        user_url = f"https://api.twitter.com/2/users/by/username/{USERNAME}"
-        user_resp = requests.get(user_url, headers=headers, timeout=10).json()
+    user_url = f"https://api.twitter.com/2/users/by/username/{USERNAME}"
+    user_resp = requests.get(user_url, headers=headers, timeout=10).json()
 
-        print("\n===== USER RESPONSE =====")
-        print(user_resp)
+    print("\n===== USER RESPONSE =====")
+    print(user_resp)
 
-        if "data" not in user_resp:
-            return "NO_USER_DATA"
+    if "data" not in user_resp:
+        return None, None
 
-        user_id = user_resp["data"]["id"]
+    user_id = user_resp["data"]["id"]
 
-        # Step 2: get tweets
-        tweet_url = (
-            f"https://api.twitter.com/2/users/{user_id}/tweets"
-            f"?max_results=5"
-            f"&tweet.fields=created_at,text"
-            f"&expansions=attachments.media_keys"
-            f"&media.fields=url"
-        )
+    tweet_url = f"https://api.twitter.com/2/users/{user_id}/tweets?max_results=5"
 
-        tweet_resp = requests.get(tweet_url, headers=headers, timeout=10).json()
+    tweet_resp = requests.get(tweet_url, headers=headers, timeout=10).json()
 
-        print("\n===== TWEET RESPONSE =====")
-        print(tweet_resp)
+    print("\n===== TWEET RESPONSE =====")
+    print(tweet_resp)
 
-        return "DONE"
-
-    except Exception as e:
-        print("ERROR:", e)
-        return "ERROR"
+    return user_resp, tweet_resp
 
 
 # -----------------------------
-# /check COMMAND (DEBUG VERSION)
+# /check COMMAND (FIXED SAFE FLOW)
 # -----------------------------
-@tree.command(name="check", description="DEBUG: Show raw X API response")
+@tree.command(name="check", description="Debug X API")
 async def check(interaction: discord.Interaction):
 
-    await interaction.response.defer()
+    # STEP 1: respond instantly (prevents 10062 error)
+    await interaction.response.send_message("🧪 Checking X API...")
 
-    result = fetch_debug_data()
+    # STEP 2: do work AFTER response
+    user_resp, tweet_resp = fetch_debug_data()
 
-    await interaction.followup.send(f"🧪 Debug finished: `{result}`")
+    if not user_resp or not tweet_resp:
+        await interaction.followup.send("❌ No data found from X API")
+        return
+
+    await interaction.followup.send("✅ Debug complete. Check Railway logs.")
 
 
 # -----------------------------
@@ -90,11 +80,7 @@ async def on_ready():
     except Exception as e:
         print("Sync error:", e)
 
-    channel = client.get_channel(CHANNEL_ID)
-    if channel:
-        await channel.send("🧪 DEBUG BOT ONLINE - X API inspection mode")
-
-    print("Bot is ready for debugging.")
+    print("Bot ready.")
 
 
 client.run(DISCORD_TOKEN)
