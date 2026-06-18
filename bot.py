@@ -11,8 +11,6 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 BEARER_TOKEN = os.getenv("X_BEARER_TOKEN")
-
-# OPTIONAL: put your Discord server ID in Railway env for instant slash updates
 GUILD_ID = os.getenv("GUILD_ID")
 
 intents = discord.Intents.default()
@@ -23,16 +21,15 @@ tree = app_commands.CommandTree(client)
 seen_ids = set()
 
 USERNAME = "SkinSpotlights"
+KEY_PHRASE = "mythic shop rotation!"
 
 
 # -----------------------------
-# X API FETCH
+# FETCH LATEST VALID TWEET
 # -----------------------------
 def fetch_latest_tweet():
     try:
-        headers = {
-            "Authorization": f"Bearer {BEARER_TOKEN}"
-        }
+        headers = {"Authorization": f"Bearer {BEARER_TOKEN}"}
 
         user_url = f"https://api.twitter.com/2/users/by/username/{USERNAME}"
         user_resp = requests.get(user_url, headers=headers, timeout=10).json()
@@ -64,27 +61,30 @@ def fetch_latest_tweet():
             media_map[m["media_key"]] = m.get("url")
 
         for t in tweets:
+            text = t["text"].lower()
+
+            # ONLY accept correct Mythic Shop posts
+            if KEY_PHRASE not in text:
+                continue
+
             if t["id"] in seen_ids:
                 continue
 
             seen_ids.add(t["id"])
 
-            text = t["text"].lower()
+            images = []
+            attachments = t.get("attachments", {})
 
-            if "mythic shop" in text and "rotation" in text:
-                images = []
+            for key in attachments.get("media_keys", []):
+                if key in media_map:
+                    images.append(media_map[key])
 
-                attachments = t.get("attachments", {})
-                for key in attachments.get("media_keys", []):
-                    if key in media_map:
-                        images.append(media_map[key])
-
-                return {
-                    "id": t["id"],
-                    "text": t["text"],
-                    "images": images,
-                    "url": f"https://x.com/{USERNAME}/status/{t['id']}"
-                }
+            return {
+                "id": t["id"],
+                "text": t["text"],
+                "images": images,
+                "url": f"https://x.com/{USERNAME}/status/{t['id']}"
+            }
 
     except Exception as e:
         print("X API error:", e)
@@ -93,33 +93,34 @@ def fetch_latest_tweet():
 
 
 # -----------------------------
-# SCHEDULED 2AM CHECK (UTC)
+# SCHEDULED 2AM UTC CHECK
 # -----------------------------
 @tasks.loop(minutes=1)
 async def scheduled_check():
     now = datetime.now(timezone.utc)
 
-    # 02:00 UTC daily check
     if now.hour == 2 and now.minute == 0:
         print("Running scheduled 2AM check...")
 
         channel = client.get_channel(CHANNEL_ID)
         if not channel:
-            print("Channel not found")
             return
 
         tweet = fetch_latest_tweet()
 
         if not tweet:
-            print("No rotation found")
+            print("No valid Mythic Shop post found")
             return
 
-        await channel.send("🚨 Mythic Shop rotation detected!")
+        await channel.send("🚨 Mythic Shop Rotation detected!")
         await channel.send(tweet["url"])
+
+        for img in tweet["images"]:
+            await channel.send(img)
 
 
 # -----------------------------
-# /check COMMAND (FIXED SYNC + NO TIMEOUT ISSUES)
+# /check COMMAND
 # -----------------------------
 @tree.command(name="check", description="Check Mythic Shop rotation manually")
 async def check(interaction: discord.Interaction):
@@ -129,31 +130,31 @@ async def check(interaction: discord.Interaction):
     tweet = fetch_latest_tweet()
 
     if not tweet:
-        await interaction.followup.send("❌ No rotation found")
+        await interaction.followup.send("❌ No Mythic Shop rotation found")
         return
 
-    await interaction.followup.send("🚨 Found latest Mythic Shop rotation!")
+    await interaction.followup.send("✅ Mythic Shop Rotation found!")
     await interaction.followup.send(tweet["url"])
+
+    for img in tweet["images"]:
+        await interaction.followup.send(img)
 
 
 # -----------------------------
-# READY EVENT (FIXED COMMAND SYNC)
+# READY EVENT
 # -----------------------------
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
 
     try:
-        # Instant sync (guild)
         if GUILD_ID:
             guild = discord.Object(id=int(GUILD_ID))
             await tree.sync(guild=guild)
             print("Guild slash commands synced.")
         else:
-            # fallback global sync
             synced = await tree.sync()
             print(f"Global sync complete: {len(synced)} commands")
-
     except Exception as e:
         print("Sync error:", e)
 
