@@ -10,7 +10,8 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
 intents = discord.Intents.default()
-bot = discord.Bot(intents=intents)
+client = discord.Client(intents=intents)
+tree = discord.app_commands.CommandTree(client)
 
 seen_ids = set()
 
@@ -65,9 +66,9 @@ def fetch_rotation_post():
 # -------------------------
 @tasks.loop(hours=1)
 async def check_rotation():
-    print("Checking for Mythic Shop updates...")
+    print("Checking Mythic Shop updates...")
 
-    channel = bot.get_channel(CHANNEL_ID)
+    channel = client.get_channel(CHANNEL_ID)
     if not channel:
         print("Channel not found")
         return
@@ -88,37 +89,36 @@ async def check_rotation():
 # -------------------------
 # SLASH COMMAND (/check)
 # -------------------------
-@bot.slash_command(name="check", description="Manually check Mythic Shop updates")
-async def check(ctx):
-    await ctx.respond("Checking Mythic Shop...")
+@tree.command(name="check", description="Manually check Mythic Shop updates")
+async def check(interaction: discord.Interaction):
+    await interaction.response.defer()
 
     result = fetch_rotation_post()
 
     if not result:
-        await ctx.followup.send("❌ No update found.")
+        await interaction.followup.send("❌ No update found.")
         return
 
-    await ctx.followup.send("🚨 Mythic Shop Rotation detected!")
+    await interaction.followup.send("🚨 Mythic Shop Rotation detected!")
 
     if result.get("image"):
-        await ctx.followup.send(result["image"])
+        await interaction.followup.send(result["image"])
 
-    await ctx.followup.send(result["url"])
+    await interaction.followup.send(result["url"])
 
 
 # -------------------------
-# ON READY (IMPORTANT FIX HERE)
+# READY EVENT
 # -------------------------
-@bot.event
+@client.event
 async def on_ready():
-    print(f"Logged in as {bot.user}")
+    print(f"Logged in as {client.user}")
 
-    channel = bot.get_channel(CHANNEL_ID)
+    await tree.sync()  # IMPORTANT FIX
+
+    channel = client.get_channel(CHANNEL_ID)
     if channel:
         await channel.send("✅ Bot is online!")
-
-    # IMPORTANT: force slash command sync
-    await bot.sync_commands()
 
     check_rotation.start()
 
@@ -126,4 +126,4 @@ async def on_ready():
 # -------------------------
 # RUN BOT
 # -------------------------
-bot.run(TOKEN)
+client.run(TOKEN)
