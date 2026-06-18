@@ -24,7 +24,7 @@ USERNAME = "SkinSpotlights"
 
 
 # -----------------------------
-# FETCH LATEST VALID TWEET
+# GET LATEST TWEET (NO FILTERING)
 # -----------------------------
 def fetch_latest_tweet():
     try:
@@ -41,7 +41,7 @@ def fetch_latest_tweet():
 
         tweet_url = (
             f"https://api.twitter.com/2/users/{user_id}/tweets"
-            f"?max_results=10"
+            f"?max_results=5"
             f"&expansions=attachments.media_keys"
             f"&media.fields=url"
         )
@@ -60,14 +60,6 @@ def fetch_latest_tweet():
             media_map[m["media_key"]] = m.get("url")
 
         for t in tweets:
-            text = t.get("text", "").lower()
-
-            # -----------------------------
-            # FIXED DETECTION LOGIC
-            # -----------------------------
-            if "mythic" not in text or "shop" not in text:
-                continue
-
             if t["id"] in seen_ids:
                 continue
 
@@ -82,7 +74,7 @@ def fetch_latest_tweet():
 
             return {
                 "id": t["id"],
-                "text": t["text"],
+                "text": t.get("text", ""),
                 "images": images,
                 "url": f"https://x.com/{USERNAME}/status/{t['id']}"
             }
@@ -94,7 +86,7 @@ def fetch_latest_tweet():
 
 
 # -----------------------------
-# SCHEDULED 2AM UTC CHECK
+# SCHEDULED 2AM CHECK (UTC)
 # -----------------------------
 @tasks.loop(minutes=1)
 async def scheduled_check():
@@ -110,7 +102,6 @@ async def scheduled_check():
         tweet = fetch_latest_tweet()
 
         if not tweet:
-            print("No Mythic Shop update found")
             return
 
         await channel.send("🚨 Mythic Shop Rotation detected!")
@@ -123,7 +114,7 @@ async def scheduled_check():
 # -----------------------------
 # /check COMMAND
 # -----------------------------
-@tree.command(name="check", description="Check Mythic Shop rotation manually")
+@tree.command(name="check", description="Check latest Mythic Shop post")
 async def check(interaction: discord.Interaction):
 
     await interaction.response.defer()
@@ -131,10 +122,10 @@ async def check(interaction: discord.Interaction):
     tweet = fetch_latest_tweet()
 
     if not tweet:
-        await interaction.followup.send("❌ No Mythic Shop rotation found")
+        await interaction.followup.send("❌ No data found from X API")
         return
 
-    await interaction.followup.send("✅ Mythic Shop Rotation found!")
+    await interaction.followup.send("📌 Latest post fetched:")
     await interaction.followup.send(tweet["url"])
 
     for img in tweet["images"]:
@@ -142,7 +133,7 @@ async def check(interaction: discord.Interaction):
 
 
 # -----------------------------
-# READY EVENT
+# READY
 # -----------------------------
 @client.event
 async def on_ready():
@@ -152,11 +143,8 @@ async def on_ready():
         if GUILD_ID:
             guild = discord.Object(id=int(GUILD_ID))
             await tree.sync(guild=guild)
-            print("Guild slash commands synced.")
         else:
-            synced = await tree.sync()
-            print(f"Global sync complete: {len(synced)} commands")
-
+            await tree.sync()
     except Exception as e:
         print("Sync error:", e)
 
