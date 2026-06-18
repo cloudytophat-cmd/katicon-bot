@@ -1,67 +1,120 @@
 import discord
+from discord.ext import tasks
 from discord import app_commands
 import os
 import requests
-from dotenv import load_dotenv
+from bs4 import BeautifulSoup
+from datetime import datetime, timezone
 
+from dotenv import load_dotenv
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-BEARER_TOKEN = os.getenv("X_BEARER_TOKEN")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 GUILD_ID = os.getenv("GUILD_ID")
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
-
 tree = app_commands.CommandTree(client)
 
 USERNAME = "SkinSpotlights"
+seen_ids = set()
+
+PROFILE_URL = f"https://x.com/{USERNAME}"
 
 
 # -----------------------------
-# SAFE DEBUG FUNCTION
+# FETCH LATEST TWEET VIA HTML
 # -----------------------------
-def fetch_debug_data():
-    headers = {"Authorization": f"Bearer {BEARER_TOKEN}"}
+def fetch_latest_tweet():
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
 
-    user_url = f"https://api.twitter.com/2/users/by/username/{USERNAME}"
-    user_resp = requests.get(user_url, headers=headers, timeout=10).json()
+        r = requests.get(PROFILE_URL, headers=headers, timeout=10)
 
-    print("\n===== USER RESPONSE =====")
-    print(user_resp)
+        print("STATUS:", r.status_code)
 
-    if "data" not in user_resp:
-        return None, None
+        if r.status_code != 200:
+            return None
 
-    user_id = user_resp["data"]["id"]
+        soup = BeautifulSoup(r.text, "html.parser")
 
-    tweet_url = f"https://api.twitter.com/2/users/{user_id}/tweets?max_results=5"
+        # Find tweet links
+        tweets = soup.find_all("a", href=True)
 
-    tweet_resp = requests.get(tweet_url, headers=headers, timeout=10).json()
+        tweet_ids = []
+        for t in tweets:
+            if "/status/" in t["href"]:
+                parts = t["href"].split("/")
+                try:
+                    tweet_id = parts[-1]
+                    if tweet_id.isdigit():
+                        tweet_ids.append(tweet_id)
+                except:
+                    continue
 
-    print("\n===== TWEET RESPONSE =====")
-    print(tweet_resp)
+        if not tweet_ids:
+            return None
 
-    return user_resp, tweet_resp
+        latest_id = tweet_ids[0]
+
+        if latest_id in seen_ids:
+            return None
+
+        seen_ids.add(latest_id)
+
+        tweet_url = f"https://x.com/{USERNAME}/status/{latest_id}"
+
+        return {
+            "id": latest_id,
+            "url": tweet_url
+        }
+
+    except Exception as e:
+        print("Scrape error:", e)
+        return None
 
 
 # -----------------------------
-# /check COMMAND (FIXED SAFE FLOW)
+# /check COMMAND
 # -----------------------------
-@tree.command(name="check", description="Debug X API")
+@tree.command(name="check", description="Check latest Mythic Shop post")
 async def check(interaction: discord.Interaction):
 
-    # STEP 1: respond instantly (prevents 10062 error)
-    await interaction.response.send_message("🧪 Checking X API...")
+    await interaction.response.send_message("🔎 Checking latest post...")
 
-    # STEP 2: do work AFTER response
-    user_resp, tweet_resp = fetch_debug_data()
+    tweet = fetch_latest_tweet()
 
-    if not user_resp or not tweet_resp:
-        await interaction.followup.send("❌ No data found from X API")
+    if not tweet:
+        await interaction.followup.send("❌ No post found (or blocked)")
         return
 
-    await interaction.followup.send("✅ Debug complete. Check Railway logs.")
+    await interaction.followup.send("📌 Latest post detected:")
+    await interaction.followup.send(tweet["url"])
+
+
+# -----------------------------
+# SCHEDULED CHECK (2AM UTC)
+# -----------------------------
+@tasks.loop(minutes=1)
+async def scheduled_check():
+    now = datetime.now(timezone.utc)
+
+    if now.hour == 2 and now.minute == 0:
+
+        channel = client.get_channel(CHANNEL_ID)
+        if not channel:
+            return
+
+        tweet = fetch_latest_tweet()
+
+        if not tweet:
+            return
+
+        await channel.send("🚨 Mythic Shop update detected!")
+        await channel.send(tweet["url"])
 
 
 # -----------------------------
@@ -80,7 +133,11 @@ async def on_ready():
     except Exception as e:
         print("Sync error:", e)
 
-    print("Bot ready.")
+    channel = client.get_channel(CHANNEL_ID)
+    if channel:
+        await channel.send("✅ No-API Mythic Bot online!")
+
+    scheduled_check.start()
 
 
 client.run(DISCORD_TOKEN)
